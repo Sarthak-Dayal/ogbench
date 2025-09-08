@@ -311,17 +311,17 @@ Here are some example commands (see [hyperparameters.sh](impls/hyperparameters.s
 
 ```shell
 # antmaze-large-navigate-v0 (GCBC)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gcbc.py
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gcbc.py
 # antmaze-large-navigate-v0 (GCIVL)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gcivl.py --agent.alpha=10.0
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gcivl.py --agent.alpha=10.0
 # antmaze-large-navigate-v0 (GCIQL)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gciql.py --agent.alpha=0.3
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/gciql.py --agent.alpha=0.3
 # antmaze-large-navigate-v0 (QRL)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/qrl.py --agent.alpha=0.003
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/qrl.py --agent.alpha=0.003
 # antmaze-large-navigate-v0 (CRL)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/crl.py --agent.alpha=0.1
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/crl.py --agent.alpha=0.1
 # antmaze-large-navigate-v0 (HIQL)
-python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/hiql.py --agent.high_alpha=3.0 --agent.low_alpha=3.0
+MUJOCO_GL=egl python main.py --env_name=antmaze-large-navigate-v0 --agent=agents/hiql.py --agent.high_alpha=3.0 --agent.low_alpha=3.0
 ```
 
 Each run typically takes 2-5 hours (on state-based tasks)
