@@ -69,14 +69,19 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         exp_a = jnp.minimum(exp_a, 100.0)
 
         # Compute the goal representations of the subgoals.
-        goal_reps = self.network.select('goal_rep')(
-            jnp.concatenate([batch['observations'], batch['low_actor_goals']], axis=-1),
+        # goal_reps = self.network.select('goal_rep')(
+        #     jnp.concatenate([batch['observations'], batch['low_actor_goals']], axis=-1),
+        #     params=grad_params,
+        # )
+        
+        alias_reps = self.network.select('alias_encoder')(
+            batch['low_actor_goals'],
             params=grad_params,
         )
         if not self.config['low_actor_rep_grad']:
             # Stop gradients through the goal representations.
-            goal_reps = jax.lax.stop_gradient(goal_reps)
-        dist = self.network.select('low_actor')(batch['observations'], goal_reps, goal_encoded=True, params=grad_params)
+            alias_reps = jax.lax.stop_gradient(alias_reps)
+        dist = self.network.select('low_actor')(batch['observations'], alias_reps, goal_encoded=True, params=grad_params)
         log_prob = dist.log_prob(batch['actions'])
 
         actor_loss = -(exp_a * log_prob).mean()
@@ -108,8 +113,11 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         exp_a = jnp.minimum(exp_a, 100.0)
 
         dist = self.network.select('high_actor')(batch['observations'], batch['high_actor_goals'], params=grad_params)
-        target = self.network.select('goal_rep')(
-            jnp.concatenate([batch['observations'], batch['high_actor_targets']], axis=-1)
+        # target = self.network.select('goal_rep')(
+        #     jnp.concatenate([batch['observations'], batch['high_actor_targets']], axis=-1)
+        # )
+        target = self.network.select('alias_encoder')(
+            batch['high_actor_targets'],
         )
         log_prob = dist.log_prob(target)
 
@@ -182,7 +190,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
 
         high_dist = self.network.select('high_actor')(observations, goals, temperature=temperature)
         goal_reps = high_dist.sample(seed=high_seed)
-        goal_reps = goal_reps / jnp.linalg.norm(goal_reps, axis=-1, keepdims=True) * jnp.sqrt(goal_reps.shape[-1])
+        # goal_reps = goal_reps / jnp.linalg.norm(goal_reps, axis=-1, keepdims=True) * jnp.sqrt(goal_reps.shape[-1])
 
         low_dist = self.network.select('low_actor')(observations, goal_reps, goal_encoded=True, temperature=temperature)
         actions = low_dist.sample(seed=low_seed)
@@ -243,7 +251,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         if config['encoder_restore_path'] is not None:
             encoder = restore_agent(encoder, config['encoder_restore_path'], config['encoder_restore_epoch'])
 
-        low_actor_aliasing = encoder.network.select('encoder')
+        alias_rep_def = encoder.network.model_def.modules['encoder']
 
         # Define the encoders that handle the inputs to the value and actor networks.
         # The subgoal representation phi([s; g]) is trained by the parameterized value function V(s, phi([s; g])).
@@ -257,7 +265,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
             value_encoder_def = GCEncoder(state_encoder=encoder_module(), concat_encoder=goal_rep_def)
             target_value_encoder_def = GCEncoder(state_encoder=encoder_module(), concat_encoder=goal_rep_def)
             # Low-level actor: pi^l(. | encoder^l(s), phi([s; w]))
-            low_actor_encoder_def = GCEncoder(state_encoder=low_actor_aliasing, goal_encoder=low_actor_aliasing)
+            low_actor_encoder_def = GCEncoder(state_encoder=alias_rep_def, goal_encoder=Identity())
             # High-level actor: pi^h(. | encoder^h([s; g]))
             high_actor_encoder_def = GCEncoder(concat_encoder=encoder_module())
         else:
@@ -267,7 +275,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
             value_encoder_def = GCEncoder(state_encoder=Identity(), concat_encoder=goal_rep_def)
             target_value_encoder_def = GCEncoder(state_encoder=Identity(), concat_encoder=goal_rep_def)
             # Low-level actor: pi^l(. | s, phi([s; w]))
-            low_actor_encoder_def = GCEncoder(state_encoder=low_actor_aliasing, goal_encoder=low_actor_aliasing)
+            low_actor_encoder_def = GCEncoder(state_encoder=alias_rep_def, goal_encoder=Identity())
             # High-level actor: pi^h(. | s, g) (i.e., no encoder)
             high_actor_encoder_def = None
 
@@ -309,10 +317,11 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         )
 
         network_info = dict(
+            alias_encoder=(alias_rep_def, (ex_observations)),
             goal_rep=(goal_rep_def, (jnp.concatenate([ex_observations, ex_goals], axis=-1))),
             value=(value_def, (ex_observations, ex_goals)),
             target_value=(target_value_def, (ex_observations, ex_goals)),
-            low_actor=(low_actor_def, (ex_observations, ex_goals)),
+            low_actor=(low_actor_def, (ex_observations, jnp.ones((ex_observations.shape[0], encoder.config['rep_dim'])))),
             high_actor=(high_actor_def, (ex_observations, ex_goals)),
         )
         networks = {k: v[0] for k, v in network_info.items()}
@@ -325,6 +334,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
 
         params = network.params
         params['modules_target_value'] = params['modules_value']
+        network.params['modules_alias_encoder'] = encoder.network.params['modules_encoder']
 
         return cls(rng, network=network, config=flax.core.FrozenDict(**config))
 
@@ -366,7 +376,7 @@ def get_config():
             # Encoder Hyperparams.
             encoder_name='acro',  # Encoder name (e.g., 'vae', 'acro').
             encoder_restore_path=None,  # Path to restore the encoder (if any) from.
-            encoder_restore_epoch=None,  # Epoch number of the encoder to restore (if any).
+            encoder_restore_epoch=None,  # Epoch number of the encoder to restore.
         )
     )
     return config

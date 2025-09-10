@@ -24,7 +24,10 @@ flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
 flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
+flags.DEFINE_string('encoder_restore_path', None, 'Restore path for encoder.')
+flags.DEFINE_string('exp_name', None, 'Experiment name.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
+flags.DEFINE_integer('encoder_restore_epoch', None, 'Restore epoch for encoder.')
 
 flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
 flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
@@ -45,6 +48,8 @@ config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
 def main(_):
     # Set up logger.
     exp_name = get_exp_name(FLAGS.seed)
+    if FLAGS.exp_name is not None:
+        exp_name = FLAGS.exp_name
     setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
 
     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)
@@ -55,6 +60,8 @@ def main(_):
 
     # Set up environment and dataset.
     config = FLAGS.agent
+    config['encoder_restore_path'] = FLAGS.encoder_restore_path
+    config['encoder_restore_epoch'] = FLAGS.encoder_restore_epoch
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
     dataset_class = {
