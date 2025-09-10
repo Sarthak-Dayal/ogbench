@@ -11,7 +11,7 @@ import wandb
 from absl import app, flags
 from encoders import encoders
 from ml_collections import config_flags
-from utils.datasets import ACRODataset, Dataset
+from utils.datasets import ACRODataset, Dataset, VAEDataset
 from utils.env_utils import make_env_and_datasets
 from utils.flax_utils import restore_agent, save_agent
 from utils.log_utils import CsvLogger, get_exp_name, get_flag_dict, setup_wandb
@@ -57,6 +57,7 @@ def main(_):
 
     dataset_class = {
         'ACRODataset': ACRODataset,
+        'VAEDataset': VAEDataset,
     }[config['dataset_class']]
     train_dataset = dataset_class(Dataset.create(**train_dataset), config)
     if val_dataset is not None:
@@ -74,8 +75,8 @@ def main(_):
     encoder_class = encoders[config['encoder_name']]
     encoder = encoder_class.create(
         FLAGS.seed,
-        example_batch['observations_t'],
-        example_batch['actions_t'],
+        example_batch['observations'],
+        example_batch['actions'],
         config,
     )
 

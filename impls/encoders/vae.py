@@ -6,12 +6,15 @@ import jax
 import jax.numpy as jnp
 import ml_collections
 import optax
-from utils.encoders import GCEncoder, encoder_modules
-from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
-from utils.networks import MLP, GCActor, GCDiscreteActor, GCValue, Identity, LengthNormalize
+import distrax
 
-class ACROTrainer(flax.struct.PyTreeNode):
-    """ACRO Train state."""
+from utils.decoders import decoder_modules
+from utils.encoders import encoder_modules
+from utils.flax_utils import ModuleDict, TrainState, nonpytree_field
+from utils.networks import MLP
+
+class VAETrainer(flax.struct.PyTreeNode):
+    """VAE Train state."""
     
     rng: Any
     network: Any
@@ -20,42 +23,46 @@ class ACROTrainer(flax.struct.PyTreeNode):
 
     @jax.jit
     def loss(self, batch, grad_params, rng=None):
-        """Compute the total loss, combining regularization on the encoder and action prediction loss."""
-        assert len(batch['observations_t'].shape) in [2, 3, 4]
-        assert len(batch['observations_t_k'].shape) in [2, 3, 4]
-        assert len(batch['actions_t'].shape) == 2
-        info = {}
-        
-        obs_t = batch['observations_t']
-        obs_t_k = batch['observations_t_k']
-        actions_t = batch['actions_t']
+        """Compute the VAE Loss."""
+        assert len(batch['observations'].shape) in [2, 3, 4]
 
-        z_t = self.network.select('encoder')(obs_t, params=grad_params)
-        z_t_k = self.network.select('encoder')(obs_t_k, params=grad_params)
+        obs = batch['observations']
+
+        z_mean = self.network.select('encoder')(obs, params=grad_params)
+        z_logstd = self.network.select('encoder_std')(obs, params=grad_params)
+        dist = distrax.MultivariateNormalDiag(loc=z_mean, scale_diag=jnp.exp(z_logstd))
+
+        rng = rng if rng is not None else self.rng
+        rng, sample_key = jax.random.split(rng)
+        z = dist.sample(seed=sample_key)
 
         # Information Bottleneck loss
         if self.config['ib_loss_type'] == "l1":
-            ib_loss = jnp.abs(z_t).sum(axis=-1).mean() + jnp.abs(z_t_k).sum(axis=-1).mean()
+            ib_loss = jnp.abs(z).sum(axis=-1).mean() + jnp.abs(z).sum(axis=-1).mean()
         elif self.config['ib_loss_type'] == "l2":
-            ib_loss = (z_t ** 2).sum(axis=-1).mean() + (z_t_k ** 2).sum(axis=-1).mean()
+            ib_loss = (z ** 2).sum(axis=-1).mean() + (z ** 2).sum(axis=-1).mean()
         elif self.config['ib_loss_type'] == "None":
             ib_loss = 0.0
         else:
             raise NotImplementedError(f"ib_loss_type not implemented: {self.config['ib_loss_type']}.")
 
-        action_preds = self.network.select('acro_pred')(jnp.concatenate([z_t, z_t_k], axis=-1), params=grad_params)
-        
-        if self.config['discrete']:
-            action_loss = optax.losses.softmax_cross_entropy_with_integer_labels(
-                action_preds, actions_t.squeeze(-1)
-            ).mean()
-        else:
-            action_loss = ((action_preds - actions_t) ** 2).mean()
+        recon = self.network.select('decoder')(z, params=grad_params)
 
-        loss = action_loss + self.config['ib_loss_coeff'] * ib_loss
+        recon_reshaped = jnp.reshape(recon, (recon.shape[0], -1))
+        obs_reshaped = jnp.reshape(obs, (obs.shape[0], -1))
+        recon_loss = ((recon_reshaped - obs_reshaped) ** 2).sum(axis=-1).mean(axis=-1)
+
+        pz = distrax.MultivariateNormalDiag(
+            loc=jnp.zeros_like(z_mean),
+            scale_diag=jnp.ones_like(z_logstd)
+        )
+        kl_penalty = dist.kl_divergence(pz).mean(axis=0)
+
+        loss = recon_loss + self.config['ib_loss_coeff'] * ib_loss + self.config['kl_penalty_coeff'] * kl_penalty
         return loss, {
-            'action_loss': action_loss,
+            'recon_loss': recon_loss,
             'ib_loss': ib_loss,
+            'kl_penalty': kl_penalty,
         }
     
     @jax.jit
@@ -84,26 +91,32 @@ class ACROTrainer(flax.struct.PyTreeNode):
         ex_actions,
         config,
     ):
-        """Create ACRO trainer instance. Train ACRO using action prediction loss and encoder to file."""
+        """Create VAE trainer instance. Train VAE using action prediction loss and encoder to file."""
 
         if config is None:
             config = get_config()
 
+
         rng = jax.random.PRNGKey(seed)
         rng, init_rng = jax.random.split(rng)
         
-        if config['discrete']:
-            action_dim = ex_actions.max() + 1
-        else:
-            action_dim = ex_actions.shape[-1]
-        
         if config['encoder'] is not None:
             encoder_module = encoder_modules[config['encoder']]
-            acro_enc_seq = [encoder_module()]
+            vae_enc_mean_seq = [encoder_module()]
+            vae_enc_std_seq = [encoder_module()]
         else:
-            acro_enc_seq = []
+            vae_enc_mean_seq = []
+            vae_enc_std_seq = []
 
-        acro_enc_seq.append(
+        vae_enc_mean_seq.append(
+            MLP(
+                hidden_dims=(*config['encoder_hidden_dims'], config['rep_dim']),
+                activate_final=False,
+                layer_norm=config['layer_norm'],
+            )
+        )
+
+        vae_enc_std_seq.append(
             MLP(
                 hidden_dims=(*config['encoder_hidden_dims'], config['rep_dim']),
                 activate_final=False,
@@ -111,18 +124,27 @@ class ACROTrainer(flax.struct.PyTreeNode):
             )
         )
         
-        acro_enc_def = nn.Sequential(acro_enc_seq)
+        vae_enc_mean_def = nn.Sequential(vae_enc_mean_seq)
+        vae_enc_std_def = nn.Sequential(vae_enc_std_seq)
 
-        acro_pred_def = MLP(
-            hidden_dims=(*config['pred_hidden_dims'], action_dim),
+        mlp_out_dim = 512 if config['encoder'] else ex_observations.shape[-1]
+        vae_dec_seq = [MLP(
+            hidden_dims=(*reversed(config['encoder_hidden_dims']), mlp_out_dim),
             activate_final=False,
             layer_norm=config['layer_norm'],
-        )
+        )]
 
-        ex_acro_pred_input = jnp.zeros((1, 2 * config['rep_dim']))
+        if config['encoder'] is not None:
+            decoder_module = decoder_modules[config['encoder']]
+            vae_dec_seq.append(decoder_module())
+
+        vae_dec_def = nn.Sequential(vae_dec_seq)
+
+        ex_latent = jnp.zeros((ex_observations.shape[0], config['rep_dim']))
         network_info = dict(
-            encoder=(acro_enc_def, (ex_observations,)), # All Encoders must contain some encoder :4)
-            acro_pred=(acro_pred_def, (ex_acro_pred_input,))
+            encoder=(vae_enc_mean_def, (ex_observations,)), # All Encoders must contain some encoder :4)
+            encoder_std=(vae_enc_std_def, (ex_observations,)),
+            decoder=(vae_dec_def, (ex_latent,)),
         )
         networks = {k: v[0] for k, v in network_info.items()}
         network_args = {k: v[1] for k, v in network_info.items()}
@@ -141,22 +163,22 @@ def get_config():
     config = ml_collections.ConfigDict(
         dict(
             # Agent hyperparameters.
-            encoder_name='acro',  # Encoder name.
+            encoder_name='vae',  # Encoder name.
             lr=3e-4,  # Learning rate.
             batch_size=1024,  # Batch size.
             encoder_hidden_dims=(256, 256),  # Hidden dimensions for the encoder MLP.
-            pred_hidden_dims=(256, 256),  # Hidden dimensions for the action predictor MLP.
             layer_norm=True,  # Whether to use layer normalization.
-            acro_k_step=25,  # acro k step.
-            rep_dim=10,  # ACRO representation dimension.
-            discrete=False,  # Whether the action space is discrete.
+            rep_dim=10,  # VAE representation dimension.
             encoder=ml_collections.config_dict.placeholder(str),  # Visual encoder name (None, 'impala_small', etc.).
             ib_loss_type='None',  # Type of information bottleneck loss ('l1' or 'l2' or none).
             ib_loss_coeff=1e-3,  # Coefficient for the information bottleneck loss.
+            kl_penalty_coeff=1.0,  # Coefficient for the KL divergence penalty.
             # Dataset hyperparameters.
-            dataset_class='ACRODataset',  # Dataset class name.
+            dataset_class='VAEDataset',  # Dataset class name.
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
+            # Miscellaneous.
+            discrete=False,
         )
     )
     return config

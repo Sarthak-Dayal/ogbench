@@ -374,7 +374,7 @@ def get_config():
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
             # Encoder Hyperparams.
-            encoder_name='acro',  # Encoder name (e.g., 'vae', 'acro').
+            encoder_name='vae',  # Encoder name (e.g., 'vae', 'acro').
             encoder_restore_path=None,  # Path to restore the encoder (if any) from.
             encoder_restore_epoch=None,  # Epoch number of the encoder to restore.
         )

@@ -449,10 +449,99 @@ class ACRODataset:
             batch['observations_t_k'] = self.dataset['observations'][np.minimum(idxs + self.config['acro_k_step'], final_state_idxs)]
 
         return {
+            'observations': batch['observations'],
+            'actions': batch['actions'],
             'observations_t': batch['observations'],
             'observations_t_k': batch['observations_t_k'],
             'actions_t': batch['actions'],
         }
+
+    def augment(self, batch, keys):
+        """Apply image augmentation to the given keys."""
+        padding = 3
+        batch_size = len(batch[keys[0]])
+        crop_froms = np.random.randint(0, 2 * padding + 1, (batch_size, 2))
+        crop_froms = np.concatenate([crop_froms, np.zeros((batch_size, 1), dtype=np.int64)], axis=1)
+        for key in keys:
+            batch[key] = jax.tree_util.tree_map(
+                lambda arr: np.array(batched_random_crop(arr, crop_froms, padding)) if len(arr.shape) == 4 else arr,
+                batch[key],
+            )
+
+    def get_observations(self, idxs):
+        """Return the observations for the given indices."""
+        if self.config['frame_stack'] is None or self.preprocess_frame_stack:
+            return jax.tree_util.tree_map(lambda arr: arr[idxs], self.dataset['observations'])
+        else:
+            return self.get_stacked_observations(idxs)
+
+    def get_stacked_observations(self, idxs):
+        """Return the frame-stacked observations for the given indices."""
+        initial_state_idxs = self.initial_locs[np.searchsorted(self.initial_locs, idxs, side='right') - 1]
+        rets = []
+        for i in reversed(range(self.config['frame_stack'])):
+            cur_idxs = np.maximum(idxs - i, initial_state_idxs)
+            rets.append(jax.tree_util.tree_map(lambda arr: arr[cur_idxs], self.dataset['observations']))
+        return jax.tree_util.tree_map(lambda *args: np.concatenate(args, axis=-1), *rets)
+
+@dataclasses.dataclass
+class VAEDataset:
+    """Dataset class for training VAE.
+
+    This class provides a method to sample a batch of observations from the dataset. It also supports frame stacking
+    and random-cropping image augmentation.
+
+    It reads the following keys from the config:
+    - p_aug: Probability of applying image augmentation.
+    - frame_stack: Number of frames to stack.
+
+    Attributes:
+        dataset: Dataset object.
+        config: Configuration dictionary.
+        preprocess_frame_stack: Whether to preprocess frame stacks. If False, frame stacks are computed on-the-fly. This
+            saves memory but may slow down training.
+    """
+
+    dataset: Dataset
+    config: Any
+    preprocess_frame_stack: bool = True
+
+    def __post_init__(self):
+        self.size = self.dataset.size
+
+        # Pre-compute trajectory boundaries.
+        (self.terminal_locs,) = np.nonzero(self.dataset['terminals'] > 0)
+        self.initial_locs = np.concatenate([[0], self.terminal_locs[:-1] + 1])
+        assert self.terminal_locs[-1] == self.size - 1
+
+        if self.config['frame_stack'] is not None:
+            # Only support compact (observation-only) datasets.
+            assert 'next_observations' not in self.dataset
+            if self.preprocess_frame_stack:
+                stacked_observations = self.get_stacked_observations(np.arange(self.size))
+                self.dataset = Dataset(self.dataset.copy(dict(observations=stacked_observations)))
+
+    def sample(self, batch_size, idxs=None, evaluation=False):
+        """Sample a batch of observations.
+
+        Args:
+            batch_size: Batch size.
+            idxs: Indices of the observations to sample. If None, random indices are sampled.
+            evaluation: Whether to sample for evaluation. If True, image augmentation is not applied.
+        """
+        if idxs is None:
+            idxs = self.dataset.get_random_idxs(batch_size)
+
+        batch = self.dataset.sample(batch_size, idxs)
+        if self.config['frame_stack'] is not None:
+            batch['observations'] = self.get_observations(idxs)
+
+        if self.config['p_aug'] is not None and not evaluation:
+            if np.random.rand() < self.config['p_aug']:
+                self.augment(batch, ['observations'])
+
+        return batch
+
 
     def augment(self, batch, keys):
         """Apply image augmentation to the given keys."""
