@@ -36,15 +36,16 @@ class CsvLogger:
         if self.file is not None:
             self.file.close()
 
-
-def get_exp_name(seed):
+def get_exp_name(seed, exp_name=''):
     """Return the experiment name."""
-    exp_name = ''
-    exp_name += f'sd{seed:03d}_'
+    exp_name += f'_sd{seed:03d}_'
+        
     if 'SLURM_JOB_ID' in os.environ:
         exp_name += f's_{os.environ["SLURM_JOB_ID"]}.'
+
     if 'SLURM_PROCID' in os.environ:
         exp_name += f'{os.environ["SLURM_PROCID"]}.'
+
     exp_name += f'{datetime.now().strftime("%Y%m%d_%H%M%S")}'
 
     return exp_name
