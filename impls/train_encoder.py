@@ -22,6 +22,7 @@ flags.DEFINE_string('run_group', 'Debug', 'Run group.')
 flags.DEFINE_integer('seed', 0, 'Random seed.')
 flags.DEFINE_string('env_name', 'antmaze-large-navigate-v0', 'Environment (dataset) name.')
 flags.DEFINE_string('save_dir', 'exp/', 'Save directory.')
+flags.DEFINE_string('exp_name', None, 'Experiment name.')
 flags.DEFINE_string('restore_path', None, 'Restore path.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
 
@@ -37,7 +38,11 @@ config_flags.DEFINE_config_file('encoder', 'encoders/acro.py', lock_config=False
 
 def main(_):
     # Set up logger.
-    exp_name = get_exp_name(FLAGS.seed)
+    if FLAGS.exp_name is not None:
+        exp_name = get_exp_name(FLAGS.seed, FLAGS.exp_name)
+    else:
+        exp_name = get_exp_name(FLAGS.seed)
+
     setup_wandb(project='OGBench', group=FLAGS.run_group, name=exp_name)
 
     FLAGS.save_dir = os.path.join(FLAGS.save_dir, wandb.run.project, FLAGS.run_group, exp_name)

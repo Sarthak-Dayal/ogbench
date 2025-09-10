@@ -48,7 +48,7 @@ config_flags.DEFINE_config_file('agent', 'agents/gciql.py', lock_config=False)
 def main(_):
     # Set up logger.
     if FLAGS.exp_name is not None:
-        exp_name = get_exp_name(FLAGS.seed, exp_name)
+        exp_name = get_exp_name(FLAGS.seed, FLAGS.exp_name)
     else:
         exp_name = get_exp_name(FLAGS.seed)
 
