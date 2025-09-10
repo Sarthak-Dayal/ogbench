@@ -33,6 +33,10 @@ flags.DEFINE_integer('save_interval', 1000000, 'Saving interval.')
 
 flags.DEFINE_integer('eval_on_cpu', 1, 'Whether to evaluate on CPU.')
 
+flags.DEFINE_integer('acro_k_step', 25, 'K-step for ACRO.')
+flags.DEFINE_string('ib_loss_type', 'None', 'Type of IB loss: None, l1, l2.')
+flags.DEFINE_float('ib_loss_coeff', 1.0, 'Coefficient for the information bottleneck loss.')
+
 config_flags.DEFINE_config_file('encoder', 'encoders/acro.py', lock_config=False)
 
 
@@ -53,6 +57,10 @@ def main(_):
 
     # Set up environment and dataset.
     config = FLAGS.encoder
+    config['acro_k_step'] = FLAGS.acro_k_step
+    config['ib_loss_type'] = FLAGS.ib_loss_type
+    config['ib_loss_coeff'] = FLAGS.ib_loss_coeff
+
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
     dataset_class = {
