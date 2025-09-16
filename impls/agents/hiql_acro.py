@@ -116,9 +116,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         # target = self.network.select('goal_rep')(
         #     jnp.concatenate([batch['observations'], batch['high_actor_targets']], axis=-1)
         # )
-        target = self.network.select('alias_encoder')(
-            batch['high_actor_targets'],
-        )
+        target = batch['high_actor_targets']
         log_prob = dist.log_prob(target)
 
         actor_loss = -(exp_a * log_prob).mean()
@@ -189,8 +187,10 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
         high_seed, low_seed = jax.random.split(seed)
 
         high_dist = self.network.select('high_actor')(observations, goals, temperature=temperature)
-        goal_reps = high_dist.sample(seed=high_seed)
+        goal_states = high_dist.sample(seed=high_seed)
         # goal_reps = goal_reps / jnp.linalg.norm(goal_reps, axis=-1, keepdims=True) * jnp.sqrt(goal_reps.shape[-1])
+
+        goal_reps = self.network.select('alias_encoder')(goal_states)
 
         low_dist = self.network.select('low_actor')(observations, goal_reps, goal_encoded=True, temperature=temperature)
         actions = low_dist.sample(seed=low_seed)
@@ -310,7 +310,7 @@ class HIQLAcroAgent(flax.struct.PyTreeNode):
 
         high_actor_def = GCActor(
             hidden_dims=config['actor_hidden_dims'],
-            action_dim=encoder.config['rep_dim'],
+            action_dim=ex_observations.shape[-1],
             state_dependent_std=False,
             const_std=config['const_std'],
             gc_encoder=high_actor_encoder_def,
@@ -374,7 +374,7 @@ def get_config():
             p_aug=0.0,  # Probability of applying image augmentation.
             frame_stack=ml_collections.config_dict.placeholder(int),  # Number of frames to stack.
             # Encoder Hyperparams.
-            encoder_name='vae',  # Encoder name (e.g., 'vae', 'acro').
+            encoder_name='acro',  # Encoder name (e.g., 'vae', 'acro').
             encoder_restore_path=None,  # Path to restore the encoder (if any) from.
             encoder_restore_epoch=None,  # Epoch number of the encoder to restore.
         )
