@@ -28,6 +28,7 @@ flags.DEFINE_string('encoder_restore_path', None, 'Restore path for encoder.')
 flags.DEFINE_string('exp_name', None, 'Experiment name.')
 flags.DEFINE_integer('restore_epoch', None, 'Restore epoch.')
 flags.DEFINE_integer('encoder_restore_epoch', None, 'Restore epoch for encoder.')
+flags.DEFINE_integer('subgoal_steps', None, 'Number of steps for each subgoal')
 
 flags.DEFINE_integer('train_steps', 1000000, 'Number of training steps.')
 flags.DEFINE_integer('log_interval', 5000, 'Logging interval.')
@@ -64,6 +65,8 @@ def main(_):
     config = FLAGS.agent
     config['encoder_restore_path'] = FLAGS.encoder_restore_path
     config['encoder_restore_epoch'] = FLAGS.encoder_restore_epoch
+    if FLAGS.subgoal_steps is not None:
+        config['subgoal_steps'] = FLAGS.subgoal_steps
     env, train_dataset, val_dataset = make_env_and_datasets(FLAGS.env_name, frame_stack=config['frame_stack'])
 
     dataset_class = {
